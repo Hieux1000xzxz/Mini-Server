@@ -1,0 +1,14 @@
+C:\Users\Admin\source\repos\MiniServer\MiniServer\bin\Debug\net8.0\MiniServer.exe
+C:\Users\Admin\source\repos\MiniServer\MiniServer\bin\Debug\net8.0\MiniServer.deps.json
+C:\Users\Admin\source\repos\MiniServer\MiniServer\bin\Debug\net8.0\MiniServer.runtimeconfig.json
+C:\Users\Admin\source\repos\MiniServer\MiniServer\bin\Debug\net8.0\MiniServer.dll
+C:\Users\Admin\source\repos\MiniServer\MiniServer\bin\Debug\net8.0\MiniServer.pdb
+C:\Users\Admin\source\repos\MiniServer\MiniServer\obj\Debug\net8.0\MiniServer.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\Admin\source\repos\MiniServer\MiniServer\obj\Debug\net8.0\MiniServer.AssemblyInfoInputs.cache
+C:\Users\Admin\source\repos\MiniServer\MiniServer\obj\Debug\net8.0\MiniServer.AssemblyInfo.cs
+C:\Users\Admin\source\repos\MiniServer\MiniServer\obj\Debug\net8.0\MiniServer.csproj.CoreCompileInputs.cache
+C:\Users\Admin\source\repos\MiniServer\MiniServer\obj\Debug\net8.0\MiniServer.dll
+C:\Users\Admin\source\repos\MiniServer\MiniServer\obj\Debug\net8.0\refint\MiniServer.dll
+C:\Users\Admin\source\repos\MiniServer\MiniServer\obj\Debug\net8.0\MiniServer.pdb
+C:\Users\Admin\source\repos\MiniServer\MiniServer\obj\Debug\net8.0\MiniServer.genruntimeconfig.cache
+C:\Users\Admin\source\repos\MiniServer\MiniServer\obj\Debug\net8.0\ref\MiniServer.dll
