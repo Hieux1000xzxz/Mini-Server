@@ -30,3 +30,4 @@ C:\Users\Admin\source\repos\MiniServer\LobbyServer\obj\Debug\net9.0\refint\Lobby
 C:\Users\Admin\source\repos\MiniServer\LobbyServer\obj\Debug\net9.0\LobbyServer.pdb
 C:\Users\Admin\source\repos\MiniServer\LobbyServer\obj\Debug\net9.0\LobbyServer.genruntimeconfig.cache
 C:\Users\Admin\source\repos\MiniServer\LobbyServer\obj\Debug\net9.0\ref\LobbyServer.dll
+C:\Users\Admin\source\repos\MiniServer\LobbyServer\obj\Debug\net9.0\LobbyServer.sourcelink.json

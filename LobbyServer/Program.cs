@@ -3,7 +3,6 @@ using Microsoft.AspNetCore.Mvc;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services
 builder.Services.AddControllers();
 builder.Services.AddCors(options =>
 {
@@ -14,23 +13,22 @@ builder.Services.AddCors(options =>
               .AllowAnyMethod();
     });
 });
+builder.Services.AddHostedService<LobbyCleanupService>();
 
 var app = builder.Build();
 app.UseCors("AllowAll");
 app.MapControllers();
 app.Run();
 
-// --- LOBBY REGISTRY ---
 public static class LobbyRegistry
 {
     public static ConcurrentDictionary<string, LobbyInfo> Lobbies = new();
 }
 
-// --- MODELS ---
 public class UserInfo
 {
-    public required string UserId { get; set; }       // ID duy nhất của user
-    public required string UserName { get; set; }     // Tên hiển thị
+    public required string UserId { get; set; }
+    public required string UserName { get; set; }
 }
 
 public class LobbyInfo
@@ -41,12 +39,17 @@ public class LobbyInfo
     public required int HostPort { get; set; }
     public int MaxPlayers { get; set; } = 6;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public bool IsGameStarted { get; set; } = false;
 
-    // Danh sách người chơi trong phòng
+    public bool HostMigrated { get; set; } = false;
+    public bool GameInProgress { get; set; } = false;
+    public bool PreserveOnHostLeave { get; set; } = false;
+
     public List<UserInfo> Users { get; set; } = new List<UserInfo>();
 
-    // Số lượng hiện tại = Users.Count
     public int CurrentPlayers => Users.Count;
+
+    public DateTime LastHeartbeat { get; set; } = DateTime.UtcNow;
 }
 
 public class LobbyRegistrationRequest
@@ -55,19 +58,33 @@ public class LobbyRegistrationRequest
     public required string HostIpAddress { get; set; }
     public required int HostPort { get; set; }
     public int MaxPlayers { get; set; } = 6;
-
-    // Tên host
     public string HostName { get; set; } = "Host";
 }
 
-// --- CONTROLLER ---
+public class HostMigrationRequest
+{
+    public bool HostMigrated { get; set; }
+    public bool GameInProgress { get; set; }
+}
+
 [ApiController]
 [Route("api/lobby")]
 public class LobbyController : ControllerBase
 {
     private readonly Random _random = new();
 
-    // POST api/lobby/register
+    [HttpGet("ping")]
+    public IActionResult Ping()
+    {
+        return Ok(new
+        {
+            Status = "OK",
+            Message = "Server is running",
+            Timestamp = DateTime.UtcNow,
+            ServerVersion = "1.0.0"
+        });
+    }
+
     [HttpPost("register")]
     public IActionResult Register([FromBody] LobbyRegistrationRequest request)
     {
@@ -99,26 +116,60 @@ public class LobbyController : ControllerBase
 
         return StatusCode(500, "Could not register lobby");
     }
-    // POST api/lobby/{id}/start
+
     [HttpPost("{lobbyId}/start")]
     public IActionResult StartGame(string lobbyId)
     {
         if (LobbyRegistry.Lobbies.TryGetValue(lobbyId, out var lobby))
         {
-            // Cập nhật trạng thái phòng (đang chơi)
+            lobby.IsGameStarted = true;
+            lobby.GameInProgress = true;
+            lobby.PreserveOnHostLeave = true;
             return Ok(new { Message = "Game started", Lobby = lobby });
         }
         return NotFound("Lobby not found");
     }
 
-    // GET api/lobby/list
+    [HttpPost("{lobbyId}/host-migration")]
+    public IActionResult HandleHostMigration(string lobbyId, [FromBody] HostMigrationRequest request)
+    {
+        if (LobbyRegistry.Lobbies.TryGetValue(lobbyId, out var lobby))
+        {
+            lobby.HostMigrated = request.HostMigrated;
+            lobby.GameInProgress = request.GameInProgress;
+            lobby.PreserveOnHostLeave = true;
+
+            lobby.LastHeartbeat = DateTime.UtcNow.AddHours(1);
+            Console.WriteLine($"[Host Migration] Lobby {lobbyId} updated for host migration");
+            return Ok(new { Message = "Host migration handled", Lobby = lobby });
+        }
+        return NotFound("Lobby not found");
+    }
+
+    [HttpPost("{lobbyId}/heartbeat")]
+    public IActionResult Heartbeat(string lobbyId)
+    {
+        if (LobbyRegistry.Lobbies.TryGetValue(lobbyId, out var lobby))
+        {
+            if (!lobby.HostMigrated)
+            {
+                lobby.LastHeartbeat = DateTime.UtcNow;
+            }
+            return Ok(new { Message = "Heartbeat received", LobbyId = lobbyId });
+        }
+        return NotFound("Lobby not found");
+    }
+
     [HttpGet("list")]
     public IActionResult List()
     {
-        return Ok(LobbyRegistry.Lobbies.Values.ToList());
+        var availableLobbies = LobbyRegistry.Lobbies.Values
+            .Where(lobby => !lobby.IsGameStarted || (lobby.IsGameStarted && lobby.HostMigrated))
+            .ToList();
+
+        return Ok(availableLobbies);
     }
 
-    // GET api/lobby/find/{id}
     [HttpGet("find/{id}")]
     public IActionResult Find(string id)
     {
@@ -128,17 +179,26 @@ public class LobbyController : ControllerBase
         return NotFound("Lobby not found");
     }
 
-    // DELETE api/lobby/unregister/{id}
     [HttpDelete("unregister/{id}")]
     public IActionResult Unregister(string id)
     {
-        if (LobbyRegistry.Lobbies.TryRemove(id, out _))
-            return Ok("Lobby removed");
+        if (LobbyRegistry.Lobbies.TryGetValue(id, out var lobby))
+        {
+            if (!lobby.IsGameStarted || !lobby.PreserveOnHostLeave)
+            {
+                if (LobbyRegistry.Lobbies.TryRemove(id, out _))
+                    return Ok("Lobby removed");
+            }
+            else
+            {
+                Console.WriteLine($"[Unregister] Preserving lobby {id} - game in progress");
+                return Ok("Lobby preserved - game in progress");
+            }
+        }
 
         return NotFound("Lobby not found");
     }
 
-    // POST api/lobby/{id}/join
     [HttpPost("{lobbyId}/join")]
     public IActionResult JoinLobby(string lobbyId, [FromBody] UserInfo user)
     {
@@ -147,17 +207,18 @@ public class LobbyController : ControllerBase
             if (lobby.CurrentPlayers >= lobby.MaxPlayers)
                 return BadRequest("Phòng đã đầy");
 
-            // Kiểm tra user đã tồn tại chưa
+            if (lobby.IsGameStarted && !lobby.HostMigrated)
+                return BadRequest("Game đã bắt đầu, không thể tham gia");
+
             if (!lobby.Users.Any(u => u.UserId == user.UserId))
                 lobby.Users.Add(user);
 
-            return Ok(lobby); // Trả về lobby kèm danh sách người dùng
+            return Ok(lobby);
         }
 
         return NotFound("Lobby not found");
     }
 
-    // POST api/lobby/{id}/leave
     [HttpPost("{lobbyId}/leave")]
     public IActionResult LeaveLobby(string lobbyId, [FromBody] UserInfo user)
     {
@@ -165,11 +226,60 @@ public class LobbyController : ControllerBase
         {
             var existingUser = lobby.Users.FirstOrDefault(u => u.UserId == user.UserId);
             if (existingUser != null)
+            {
                 lobby.Users.Remove(existingUser);
+                Console.WriteLine($"[Leave] User {user.UserName} left lobby {lobbyId}");
+
+                if (lobby.Users.Count == 0)
+                {
+                    if (lobby.PreserveOnHostLeave && lobby.GameInProgress)
+                    {
+                        Console.WriteLine($"[Leave] Lobby {lobbyId} is empty but preserved (game in progress)");
+                        return Ok(new { Message = "Player left, lobby preserved but empty", LobbyEmpty = true, Lobby = lobby });
+                    }
+                    else
+                    {
+                        LobbyRegistry.Lobbies.TryRemove(lobbyId, out _);
+                        return Ok(new { Message = "Player left and lobby removed (empty)", LobbyRemoved = true });
+                    }
+                }
+            }
 
             return Ok(lobby);
         }
 
+        return NotFound("Lobby not found");
+    }
+
+    [HttpPost("{lobbyId}/kick/{userId}")]
+    public IActionResult KickPlayer(string lobbyId, string userId)
+    {
+        if (LobbyRegistry.Lobbies.TryGetValue(lobbyId, out var lobby))
+        {
+            var user = lobby.Users.FirstOrDefault(u => u.UserId == userId);
+            if (user != null)
+            {
+                lobby.Users.Remove(user);
+                return Ok(new { Message = $"User {user.UserName} kicked", Lobby = lobby });
+            }
+            return NotFound("User not found in lobby");
+        }
+        return NotFound("Lobby not found");
+    }
+
+    [HttpPost("{lobbyId}/cleanup")]
+    public IActionResult CleanupEmptyLobby(string lobbyId)
+    {
+        if (LobbyRegistry.Lobbies.TryGetValue(lobbyId, out var lobby))
+        {
+            if (lobby.Users.Count == 0)
+            {
+                LobbyRegistry.Lobbies.TryRemove(lobbyId, out _);
+                Console.WriteLine($"[Cleanup] Empty lobby {lobbyId} removed");
+                return Ok(new { Message = "Empty lobby cleaned up", LobbyRemoved = true });
+            }
+            return Ok(new { Message = "Lobby still has players", Lobby = lobby });
+        }
         return NotFound("Lobby not found");
     }
 
@@ -178,5 +288,48 @@ public class LobbyController : ControllerBase
         const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
         return new string(Enumerable.Repeat(chars, len)
             .Select(s => s[_random.Next(s.Length)]).ToArray());
+    }
+}
+
+public class LobbyCleanupService : BackgroundService
+{
+    private readonly TimeSpan _checkInterval = TimeSpan.FromSeconds(30);
+    private readonly TimeSpan _timeout = TimeSpan.FromMinutes(5);
+    private readonly TimeSpan _emptyLobbyTimeout = TimeSpan.FromMinutes(10);
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            var lobbies = LobbyRegistry.Lobbies.ToList();
+
+            foreach (var kvp in lobbies)
+            {
+                var lobby = kvp.Value;
+                var now = DateTime.UtcNow;
+
+                if (lobby.Users.Count == 0 && (now - lobby.CreatedAt) > _emptyLobbyTimeout)
+                {
+                    LobbyRegistry.Lobbies.TryRemove(kvp.Key, out _);
+                    Console.WriteLine($"[Cleanup] Empty lobby {kvp.Key} removed due to timeout.");
+                    continue;
+                }
+
+                if (!lobby.HostMigrated && !lobby.PreserveOnHostLeave)
+                {
+                    if (now - lobby.LastHeartbeat > _timeout)
+                    {
+                        LobbyRegistry.Lobbies.TryRemove(kvp.Key, out _);
+                        Console.WriteLine($"[Cleanup] Lobby {kvp.Key} removed due to heartbeat timeout.");
+                    }
+                }
+                else if (lobby.HostMigrated || lobby.PreserveOnHostLeave)
+                {
+                    Console.WriteLine($"[Cleanup] Preserving lobby {kvp.Key} - host migration or preserve flag set");
+                }
+            }
+
+            await Task.Delay(_checkInterval, stoppingToken);
+        }
     }
 }
