@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
@@ -13,11 +14,17 @@ builder.Services.AddCors(options =>
               .AllowAnyMethod();
     });
 });
+
 builder.Services.AddHostedService<LobbyCleanupService>();
 
 var app = builder.Build();
+
 app.UseCors("AllowAll");
 app.MapControllers();
+
+var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
+app.Urls.Add($"http://*:{port}");
+
 app.Run();
 
 public static class LobbyRegistry
@@ -29,6 +36,15 @@ public class UserInfo
 {
     public required string UserId { get; set; }
     public required string UserName { get; set; }
+    public int AvatarIndex { get; set; } = 0;
+}
+
+public class UpdateLobbyNameRequest
+{
+    public required string LobbyId { get; set; }
+    public required string LobbyName { get; set; }
+
+    public string? RequestingUserId { get; set; }
 }
 
 public class LobbyInfo
@@ -59,6 +75,8 @@ public class LobbyRegistrationRequest
     public required int HostPort { get; set; }
     public int MaxPlayers { get; set; } = 6;
     public string HostName { get; set; } = "Host";
+        public int AvatarIndex { get; set; } = 0;
+
 }
 
 public class HostMigrationRequest
@@ -106,7 +124,8 @@ public class LobbyController : ControllerBase
                 new UserInfo
                 {
                     UserId = Guid.NewGuid().ToString(),
-                    UserName = request.HostName
+                    UserName = request.HostName,
+                    AvatarIndex = request.AvatarIndex 
                 }
             }
         };
@@ -144,6 +163,26 @@ public class LobbyController : ControllerBase
             return Ok(new { Message = "Host migration handled", Lobby = lobby });
         }
         return NotFound("Lobby not found");
+    }
+
+    [HttpPost("{lobbyId}/rename")]
+    public IActionResult RenameLobby(string lobbyId, [FromBody] UpdateLobbyNameRequest request)
+    {
+        if (!string.Equals(lobbyId, request.LobbyId, StringComparison.OrdinalIgnoreCase))
+            return BadRequest("LobbyId in route and body do not match.");
+
+        if (!LobbyRegistry.Lobbies.TryGetValue(lobbyId, out var lobby))
+            return NotFound("Lobby not found");
+
+        // if (!string.IsNullOrEmpty(request.RequestingUserId) && lobby.HostUserId != request.RequestingUserId)
+        //     return Forbid("Only the host can rename the lobby.");
+
+        lobby.LobbyName = request.LobbyName;
+        lobby.LastHeartbeat = DateTime.UtcNow;
+
+        Console.WriteLine($"[Rename] Lobby {lobbyId} renamed to {request.LobbyName} by {request.RequestingUserId ?? "unknown"}");
+
+        return Ok(new { Message = "Lobby name updated", Lobby = lobby });
     }
 
     [HttpPost("{lobbyId}/heartbeat")]

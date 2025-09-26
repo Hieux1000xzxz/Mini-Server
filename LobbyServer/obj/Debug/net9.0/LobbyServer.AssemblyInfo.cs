@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("LobbyServer")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+5ae9d51a1beb1fb21a1c392999bf9058b1169048")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+dfe51fce2ae994cee0eb4e7fde42cd59337cfe3b")]
 [assembly: System.Reflection.AssemblyProductAttribute("LobbyServer")]
 [assembly: System.Reflection.AssemblyTitleAttribute("LobbyServer")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
