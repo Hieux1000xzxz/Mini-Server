@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("MiniServer")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+44cd5600b30f3b5adc825593834d7faf8fa12627")]
 [assembly: System.Reflection.AssemblyProductAttribute("MiniServer")]
 [assembly: System.Reflection.AssemblyTitleAttribute("MiniServer")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
