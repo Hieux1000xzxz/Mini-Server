@@ -37,6 +37,7 @@ public class UserInfo
     public required string UserId { get; set; }
     public required string UserName { get; set; }
     public int AvatarIndex { get; set; } = 0;
+    public bool IsReady { get; set; } = false;
 }
 
 public class UpdateLobbyNameRequest
@@ -44,6 +45,12 @@ public class UpdateLobbyNameRequest
     public required string LobbyId { get; set; }
     public required string LobbyName { get; set; }
     public string? RequestingUserId { get; set; }
+}
+
+public class UpdateReadyRequest
+{
+    public required string UserId { get; set; }
+    public bool IsReady { get; set; }
 }
 
 public class RelayLobbyInfo
@@ -158,6 +165,11 @@ public class LobbyController : ControllerBase
     {
         if (LobbyRegistry.Lobbies.TryGetValue(lobbyId, out var lobby))
         {
+            if (!lobby.Users.All(u => u.IsReady))
+            {
+                return BadRequest("Not all players are ready");
+            }
+
             lobby.IsGameStarted = true;
             lobby.GameInProgress = true;
             lobby.PreserveOnHostLeave = true;
@@ -167,6 +179,7 @@ public class LobbyController : ControllerBase
         }
         return NotFound("Lobby not found");
     }
+
 
     [HttpPost("{lobbyId}/host-migration")]
     public IActionResult HandleHostMigration(string lobbyId, [FromBody] HostMigrationRequest request)
@@ -213,6 +226,32 @@ public class LobbyController : ControllerBase
         Console.WriteLine($"[Rename] Relay lobby {lobbyId} renamed to '{request.LobbyName}' by {request.RequestingUserId ?? "unknown"}");
 
         return Ok(new { Message = "Lobby name updated", Lobby = lobby });
+    }
+
+    [HttpPost("{lobbyId}/ready")]
+    public IActionResult SetReady(string lobbyId, [FromBody] UpdateReadyRequest request)
+    {
+        if (LobbyRegistry.Lobbies.TryGetValue(lobbyId, out var lobby))
+        {
+            var user = lobby.Users.FirstOrDefault(u => u.UserId == request.UserId);
+            if (user == null)
+                return NotFound("User not found in lobby");
+
+            user.IsReady = request.IsReady;
+            lobby.LastHeartbeat = DateTime.UtcNow;
+
+            Console.WriteLine($"[Ready] User {user.UserName} set Ready={request.IsReady} in lobby {lobbyId}");
+
+            bool allReady = lobby.Users.All(u => u.IsReady);
+            return Ok(new
+            {
+                Message = "Ready state updated",
+                User = user,
+                AllReady = allReady,
+                Lobby = lobby
+            });
+        }
+        return NotFound("Lobby not found");
     }
 
     [HttpPost("{lobbyId}/heartbeat")]
@@ -422,9 +461,9 @@ public class LobbyController : ControllerBase
 public class LobbyCleanupService : BackgroundService
 {
     private readonly TimeSpan _checkInterval = TimeSpan.FromSeconds(30);
-    private readonly TimeSpan _timeout = TimeSpan.FromMinutes(5);
-    private readonly TimeSpan _emptyLobbyTimeout = TimeSpan.FromMinutes(10);
-    private readonly TimeSpan _relayCodeTimeout = TimeSpan.FromMinutes(30); // Relay codes may expire
+    private readonly TimeSpan _timeout = TimeSpan.FromMinutes(2);
+    private readonly TimeSpan _emptyLobbyTimeout = TimeSpan.FromMinutes(5);
+    private readonly TimeSpan _relayCodeTimeout = TimeSpan.FromMinutes(30); 
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
