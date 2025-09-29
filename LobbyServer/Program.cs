@@ -78,12 +78,11 @@ public class RelayLobbyInfo
 public class RelayLobbyRegistrationRequest
 {
     public required string LobbyName { get; set; }
-
     public required string RelayJoinCode { get; set; }
-
     public int MaxPlayers { get; set; } = 6;
     public string HostName { get; set; } = "Host";
     public int AvatarIndex { get; set; } = 0;
+    public string HostUserId { get; set; } = string.Empty;
 }
 
 public class HostMigrationRequest
@@ -125,13 +124,18 @@ public class LobbyController : ControllerBase
             return BadRequest("Invalid RelayJoinCode format");
         }
 
+        if (string.IsNullOrEmpty(request.HostUserId))
+        {
+            return BadRequest("HostUserId is required");
+        }
+
         string lobbyId;
         do
         {
             lobbyId = GenerateLobbyId(6);
         } while (LobbyRegistry.Lobbies.ContainsKey(lobbyId));
 
-        var hostUserId = Guid.NewGuid().ToString();
+        var hostUserId = request.HostUserId;
 
         var lobbyInfo = new RelayLobbyInfo
         {
@@ -141,19 +145,20 @@ public class LobbyController : ControllerBase
             MaxPlayers = request.MaxPlayers,
             HostUserId = hostUserId,
             Users = new List<UserInfo>
+        {
+            new UserInfo
             {
-                new UserInfo
-                {
-                    UserId = hostUserId,
-                    UserName = request.HostName,
-                    AvatarIndex = request.AvatarIndex
-                }
+                UserId = hostUserId,
+                UserName = request.HostName,
+                AvatarIndex = request.AvatarIndex,
+                IsReady = true 
             }
+        }
         };
 
         if (LobbyRegistry.Lobbies.TryAdd(lobbyId, lobbyInfo))
         {
-            Console.WriteLine($"[Register] Relay lobby {lobbyId} registered with join code: {request.RelayJoinCode}");
+            Console.WriteLine($"[Register] Relay lobby {lobbyId} registered with host: {hostUserId} and join code: {request.RelayJoinCode}");
             return Ok(lobbyInfo);
         }
 
