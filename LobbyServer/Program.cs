@@ -73,6 +73,13 @@ public class RelayLobbyInfo
 
     public int CurrentPlayers => Users.Count;
     public DateTime LastHeartbeat { get; set; } = DateTime.UtcNow;
+    public Dictionary<string, DateTime> ClientHeartbeats { get; set; } = new Dictionary<string, DateTime>();
+
+}
+
+public class ClientHeartbeatRequest
+{
+    public required string UserId { get; set; }
 }
 
 public class RelayLobbyRegistrationRequest
@@ -109,6 +116,27 @@ public class LobbyController : ControllerBase
             ServerVersion = "2.0.0-Relay",
             Features = new[] { "Unity Relay Support", "Cross-platform Multiplayer" }
         });
+    }
+
+    [HttpPost("{lobbyId}/client-heartbeat")]
+    public IActionResult ClientHeartbeat(string lobbyId, [FromBody] ClientHeartbeatRequest request)
+    {
+        if (LobbyRegistry.Lobbies.TryGetValue(lobbyId, out var lobby))
+        {
+            var user = lobby.Users.FirstOrDefault(u => u.UserId == request.UserId);
+            if (user == null)
+            {
+                Console.WriteLine($"[Client Heartbeat] User {request.UserId} not found in lobby {lobbyId}");
+                return NotFound("User not found in lobby");
+            }
+
+            lobby.ClientHeartbeats[request.UserId] = DateTime.UtcNow;
+
+            Console.WriteLine($"[Client Heartbeat] User {user.UserName} heartbeat received in lobby {lobbyId}");
+            return Ok(new { Message = "Client heartbeat received", UserId = request.UserId });
+        }
+
+        return NotFound("Lobby not found");
     }
 
     [HttpPost("register")]
@@ -352,12 +380,14 @@ public class LobbyController : ControllerBase
             if (existingUser == null)
             {
                 lobby.Users.Add(user);
+                lobby.ClientHeartbeats[user.UserId] = DateTime.UtcNow;
                 Console.WriteLine($"[Join] User {user.UserName} joined relay lobby {lobbyId} ({lobby.CurrentPlayers}/{lobby.MaxPlayers})");
             }
             else
             {
                 existingUser.UserName = user.UserName;
                 existingUser.AvatarIndex = user.AvatarIndex;
+                lobby.ClientHeartbeats[user.UserId] = DateTime.UtcNow;
                 Console.WriteLine($"[Join] User {user.UserName} rejoined relay lobby {lobbyId}");
             }
 
@@ -376,6 +406,7 @@ public class LobbyController : ControllerBase
             if (existingUser != null)
             {
                 lobby.Users.Remove(existingUser);
+                lobby.ClientHeartbeats.Remove(user.UserId);
                 Console.WriteLine($"[Leave] User {user.UserName} left relay lobby {lobbyId} ({lobby.CurrentPlayers}/{lobby.MaxPlayers})");
 
                 if (lobby.Users.Count == 0)
@@ -465,24 +496,73 @@ public class LobbyController : ControllerBase
 
 public class LobbyCleanupService : BackgroundService
 {
-    private readonly TimeSpan _checkInterval = TimeSpan.FromSeconds(30);
+    private readonly TimeSpan _checkInterval = TimeSpan.FromSeconds(10);
     private readonly TimeSpan _timeout = TimeSpan.FromMinutes(2);
     private readonly TimeSpan _emptyLobbyTimeout = TimeSpan.FromMinutes(5);
-    private readonly TimeSpan _relayCodeTimeout = TimeSpan.FromMinutes(30); 
+    private readonly TimeSpan _relayCodeTimeout = TimeSpan.FromMinutes(30);
+    private readonly TimeSpan _clientHeartbeatTimeout = TimeSpan.FromSeconds(10);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        Console.WriteLine("[Cleanup Service] Relay lobby cleanup service started");
+        Console.WriteLine("[Cleanup Service] Relay lobby cleanup service started with client heartbeat monitoring");
 
         while (!stoppingToken.IsCancellationRequested)
         {
             var lobbies = LobbyRegistry.Lobbies.ToList();
             var now = DateTime.UtcNow;
             int cleanedCount = 0;
+            int clientsRemoved = 0;
 
             foreach (var kvp in lobbies)
             {
                 var lobby = kvp.Value;
+
+                var inactiveClients = new List<string>();
+
+                foreach (var user in lobby.Users.ToList())
+                {
+                    if (lobby.ClientHeartbeats.TryGetValue(user.UserId, out var lastHeartbeat))
+                    {
+                        if (now - lastHeartbeat > _clientHeartbeatTimeout)
+                        {
+                            inactiveClients.Add(user.UserId);
+                        }
+                    }
+                    else
+                    {
+                        lobby.ClientHeartbeats[user.UserId] = now;
+                    }
+                }
+
+                foreach (var userId in inactiveClients)
+                {
+                    var user = lobby.Users.FirstOrDefault(u => u.UserId == userId);
+                    if (user != null)
+                    {
+                        lobby.Users.Remove(user);
+                        lobby.ClientHeartbeats.Remove(userId);
+                        Console.WriteLine($"[Cleanup] Removed inactive client {user.UserName} from lobby {kvp.Key}");
+                        clientsRemoved++;
+
+                        if (userId == lobby.HostUserId && lobby.Users.Count > 0)
+                        {
+                            var newHost = lobby.Users.First();
+                            lobby.HostUserId = newHost.UserId;
+                            Console.WriteLine($"[Cleanup] Host migrated to {newHost.UserName} in lobby {kvp.Key}");
+                        }
+                    }
+                }
+
+                if (lobby.Users.Count == 0)
+                {
+                    if (!lobby.PreserveOnHostLeave || (now - lobby.CreatedAt) > _emptyLobbyTimeout)
+                    {
+                        LobbyRegistry.Lobbies.TryRemove(kvp.Key, out _);
+                        Console.WriteLine($"[Cleanup] Empty lobby {kvp.Key} removed after client cleanup");
+                        cleanedCount++;
+                        continue;
+                    }
+                }
 
                 if (lobby.Users.Count == 0 && (now - lobby.CreatedAt) > _emptyLobbyTimeout)
                 {
@@ -510,19 +590,11 @@ public class LobbyCleanupService : BackgroundService
                     cleanedCount++;
                     continue;
                 }
-
-                if (lobby.HostMigrated || lobby.PreserveOnHostLeave)
-                {
-                    if ((now.Minute % 5) == 0)
-                    {
-                        Console.WriteLine($"[Cleanup] Preserving relay lobby {kvp.Key} - host migration or preserve flag set");
-                    }
-                }
             }
 
-            if (cleanedCount > 0)
+            if (cleanedCount > 0 || clientsRemoved > 0)
             {
-                Console.WriteLine($"[Cleanup] Cleaned up {cleanedCount} relay lobbies. Remaining: {LobbyRegistry.Lobbies.Count}");
+                Console.WriteLine($"[Cleanup] Cleaned up {cleanedCount} lobbies and {clientsRemoved} inactive clients. Remaining lobbies: {LobbyRegistry.Lobbies.Count}");
             }
 
             await Task.Delay(_checkInterval, stoppingToken);
