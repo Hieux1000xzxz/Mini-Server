@@ -500,7 +500,7 @@ public class LobbyCleanupService : BackgroundService
     private readonly TimeSpan _timeout = TimeSpan.FromMinutes(2);
     private readonly TimeSpan _emptyLobbyTimeout = TimeSpan.FromMinutes(5);
     private readonly TimeSpan _relayCodeTimeout = TimeSpan.FromMinutes(30);
-    private readonly TimeSpan _clientHeartbeatTimeout = TimeSpan.FromSeconds(10);
+    private readonly TimeSpan _clientHeartbeatTimeout = TimeSpan.FromSeconds(15); // 15 giây (3 lần miss ping)
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -521,6 +521,12 @@ public class LobbyCleanupService : BackgroundService
 
                 foreach (var user in lobby.Users.ToList())
                 {
+                    // QUAN TRỌNG: Skip host - host sử dụng host heartbeat riêng
+                    if (user.UserId == lobby.HostUserId)
+                    {
+                        continue;
+                    }
+
                     if (lobby.ClientHeartbeats.TryGetValue(user.UserId, out var lastHeartbeat))
                     {
                         if (now - lastHeartbeat > _clientHeartbeatTimeout)
@@ -530,10 +536,13 @@ public class LobbyCleanupService : BackgroundService
                     }
                     else
                     {
+                        // Nếu client chưa có heartbeat record, tạo một cái với thời gian hiện tại
+                        // để cho họ grace period
                         lobby.ClientHeartbeats[user.UserId] = now;
                     }
                 }
 
+                // Remove inactive clients
                 foreach (var userId in inactiveClients)
                 {
                     var user = lobby.Users.FirstOrDefault(u => u.UserId == userId);
@@ -544,6 +553,8 @@ public class LobbyCleanupService : BackgroundService
                         Console.WriteLine($"[Cleanup] Removed inactive client {user.UserName} from lobby {kvp.Key}");
                         clientsRemoved++;
 
+                        // Nếu client bị remove là host (không nên xảy ra do đã skip ở trên),
+                        // migrate host sang user khác
                         if (userId == lobby.HostUserId && lobby.Users.Count > 0)
                         {
                             var newHost = lobby.Users.First();
@@ -553,6 +564,7 @@ public class LobbyCleanupService : BackgroundService
                     }
                 }
 
+                // Check nếu lobby empty sau khi remove inactive clients
                 if (lobby.Users.Count == 0)
                 {
                     if (!lobby.PreserveOnHostLeave || (now - lobby.CreatedAt) > _emptyLobbyTimeout)
@@ -564,20 +576,13 @@ public class LobbyCleanupService : BackgroundService
                     }
                 }
 
-                if (lobby.Users.Count == 0 && (now - lobby.CreatedAt) > _emptyLobbyTimeout)
-                {
-                    LobbyRegistry.Lobbies.TryRemove(kvp.Key, out _);
-                    Console.WriteLine($"[Cleanup] Empty relay lobby {kvp.Key} removed due to timeout");
-                    cleanedCount++;
-                    continue;
-                }
-
+                // Existing cleanup logic cho lobby timeout
                 if (!lobby.HostMigrated && !lobby.PreserveOnHostLeave)
                 {
                     if (now - lobby.LastHeartbeat > _timeout)
                     {
                         LobbyRegistry.Lobbies.TryRemove(kvp.Key, out _);
-                        Console.WriteLine($"[Cleanup] Relay lobby {kvp.Key} removed due to heartbeat timeout");
+                        Console.WriteLine($"[Cleanup] Relay lobby {kvp.Key} removed due to host heartbeat timeout");
                         cleanedCount++;
                         continue;
                     }
